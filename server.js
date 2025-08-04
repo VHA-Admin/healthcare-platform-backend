@@ -1,10 +1,10 @@
-// File: server.js - OPTIMIZED FOR RENDER FREE TIER
+// File: server.js - FIXED FOR RENDER FREE TIER
 const express = require('express');
 const mongoose = require('mongoose');
 const cors = require('cors');
 const dotenv = require('dotenv');
 const path = require('path');
-const compression = require('compression'); // ADD THIS
+const compression = require('compression');
 const authRoutes = require('./routes/authRoutes');
 const practitionerRoutes = require('./routes/practitionerRoutes');
 const eventRoutes = require('./routes/eventRoutes');
@@ -34,15 +34,11 @@ app.use(express.urlencoded({ extended: true, limit: '50mb' }));
 // Serve static files
 app.use('/uploads', express.static(path.join(__dirname, 'uploads')));
 
-// OPTIMIZED MongoDB connection for free tier
-mongoose.connect(process.env.MONGODB_URI, {
-  maxPoolSize: 5,        // Lower connection pool for free tier
-  serverSelectionTimeoutMS: 10000, // 10 seconds
-  socketTimeoutMS: 45000, // 45 seconds
-  bufferMaxEntries: 0,    // Disable buffering
-  retryWrites: true,
-  retryReads: true
-})
+// FIXED: Set mongoose options and simple connection
+mongoose.set('strictQuery', false); // Fix deprecation warning
+
+// Simple MongoDB connection that works with all versions
+mongoose.connect(process.env.MONGODB_URI)
 .then(() => {
   console.log('✅ Connected to MongoDB');
   console.log('📊 Database ready for queries');
