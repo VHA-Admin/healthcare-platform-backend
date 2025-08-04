@@ -1,107 +1,75 @@
-// File: routes/publicPractitionerRoutes.js
+// File: routes/publicPractitionerRoutes.js - OPTIMIZED FOR FREE TIER
 const express = require('express');
 const router = express.Router();
 const Practitioner = require('../models/Practitioner');
 
 // @desc    Get all active practitioners for public directory
-// @route   GET /api/public/practitioners
+// @route   GET /api/public/practitioners  
 // @access  Public
 router.get('/', async (req, res) => {
   try {
-    // Build query - only show active practitioners
-    let query = { status: 'active' };
+    console.log('🔍 Public practitioners request:', req.query);
     
-    // Filter by search term
-    if (req.query.search) {
-      query = {
-        ...query,
-        $or: [
-          { name: { $regex: req.query.search, $options: 'i' } },
-          { specialty: { $regex: req.query.search, $options: 'i' } },
-          { bio: { $regex: req.query.search, $options: 'i' } }
-        ]
-      };
+    const startTime = performance.now();
+    
+    // CRITICAL: Simple query for free tier - let frontend handle complex filtering
+    const query = { status: 'active' };
+    
+    // Only add search if provided (most expensive operation)
+    if (req.query.search && req.query.search.trim()) {
+      query.$or = [
+        { name: { $regex: req.query.search.trim(), $options: 'i' } },
+        { specialty: { $regex: req.query.search.trim(), $options: 'i' } },
+        { bio: { $regex: req.query.search.trim(), $options: 'i' } }
+      ];
     }
     
-    // Filter by specialty
-    if (req.query.specialty) {
-      if (Array.isArray(req.query.specialty)) {
-        query.specialty = { $in: req.query.specialty };
-      } else {
-        query.specialty = req.query.specialty;
-      }
-    }
+    console.log('📊 Database query:', query);
     
-    // Filter by location
-    if (req.query.location) {
-      if (Array.isArray(req.query.location)) {
-        query.locations = { $in: req.query.location };
-      } else {
-        query.locations = req.query.location;
-      }
-    }
+    // OPTIMIZED: Get all practitioners at once, let frontend filter
+    const practitioners = await Practitioner
+      .find(query)
+      .select('name title specialty experience bio locations email phone fees insurances paymentOptions sessionTypes isFeatured imageUrl status')
+      .sort({ isFeatured: -1, name: 1 })
+      .limit(100) // Reasonable limit for free tier
+      .lean() // Return plain objects for speed
+      .exec();
     
-    // Filter by insurances
-    if (req.query.insurance) {
-      if (Array.isArray(req.query.insurance)) {
-        query.insurances = { $in: req.query.insurance };
-      } else {
-        query.insurances = req.query.insurance;
-      }
-    }
+    const duration = performance.now() - startTime;
+    console.log(`✅ Found ${practitioners.length} practitioners in ${duration.toFixed(0)}ms`);
     
-    // Filter by payment options
-    if (req.query.paymentOption) {
-      if (Array.isArray(req.query.paymentOption)) {
-        query.paymentOptions = { $in: req.query.paymentOption };
-      } else {
-        query.paymentOptions = req.query.paymentOption;
-      }
-    }
+    // Add cache headers
+    res.set({
+      'Cache-Control': 'public, max-age=300', // 5 minutes
+      'ETag': `"practitioners-${Date.now()}"`,
+      'X-Response-Time': `${duration.toFixed(0)}ms`
+    });
     
-    // Filter by session types
-    if (req.query.sessionType) {
-      if (Array.isArray(req.query.sessionType)) {
-        query.sessionTypes = { $in: req.query.sessionType };
-      } else {
-        query.sessionTypes = req.query.sessionType;
-      }
-    }
-    
-    // Filter by max fee
-    if (req.query.maxFee) {
-      query['fees.followUp'] = { $lte: parseInt(req.query.maxFee) };
-    }
-    
-    // Pagination
-    const page = parseInt(req.query.page, 10) || 1;
-    const limit = parseInt(req.query.limit, 10) || 12;
-    const startIndex = (page - 1) * limit;
-    
-    // Execute query
-    const practitioners = await Practitioner.find(query)
-      .sort({ isFeatured: -1, rating: -1 })
-      .skip(startIndex)
-      .limit(limit);
-    
-    // Get total count
-    const total = await Practitioner.countDocuments(query);
-    
-    res.status(200).json({
+    res.json({
       success: true,
       count: practitioners.length,
-      pagination: {
-        total,
-        page,
-        pages: Math.ceil(total / limit)
-      },
-      data: practitioners
+      data: practitioners,
+      cached: false,
+      responseTime: `${duration.toFixed(0)}ms`
     });
-  } catch (err) {
-    console.error(err);
-    res.status(500).json({
+    
+  } catch (error) {
+    console.error('❌ Error fetching practitioners:', error);
+    
+    // Better error handling for free tier
+    let statusCode = 500;
+    let message = 'Failed to fetch practitioners';
+    
+    if (error.name === 'MongooseError' || error.name === 'MongoError') {
+      statusCode = 503;
+      message = 'Database temporarily unavailable';
+    }
+    
+    res.status(statusCode).json({
       success: false,
-      message: 'Server error'
+      error: message,
+      message: process.env.NODE_ENV === 'development' ? error.message : 'Server error',
+      timestamp: new Date().toISOString()
     });
   }
 });
@@ -111,10 +79,14 @@ router.get('/', async (req, res) => {
 // @access  Public
 router.get('/:id', async (req, res) => {
   try {
-    const practitioner = await Practitioner.findOne({
-      _id: req.params.id,
-      status: 'active'
-    });
+    console.log('👤 Getting practitioner:', req.params.id);
+    
+    const practitioner = await Practitioner
+      .findOne({
+        _id: req.params.id,
+        status: 'active'
+      })
+      .lean();
     
     if (!practitioner) {
       return res.status(404).json({
@@ -123,15 +95,22 @@ router.get('/:id', async (req, res) => {
       });
     }
     
-    res.status(200).json({
+    // Cache individual practitioner for longer
+    res.set({
+      'Cache-Control': 'public, max-age=600', // 10 minutes
+      'ETag': `"practitioner-${practitioner._id}"`
+    });
+    
+    res.json({
       success: true,
       data: practitioner
     });
-  } catch (err) {
-    console.error(err);
+    
+  } catch (error) {
+    console.error('❌ Error fetching practitioner:', error);
     
     // Handle invalid ObjectId
-    if (err.kind === 'ObjectId') {
+    if (error.kind === 'ObjectId' || error.name === 'CastError') {
       return res.status(404).json({
         success: false,
         message: 'Practitioner not found'
@@ -147,21 +126,34 @@ router.get('/:id', async (req, res) => {
 
 // @desc    Get featured practitioners
 // @route   GET /api/public/practitioners/featured
-// @access  Public
+// @access  Public  
 router.get('/featured/list', async (req, res) => {
   try {
-    const practitioners = await Practitioner.find({
-      status: 'active',
-      isFeatured: true
-    }).limit(5);
+    console.log('⭐ Getting featured practitioners');
     
-    res.status(200).json({
+    const practitioners = await Practitioner
+      .find({
+        status: 'active',
+        isFeatured: true
+      })
+      .select('name title specialty experience bio locations email phone fees sessionTypes imageUrl')
+      .limit(5)
+      .lean();
+    
+    // Cache featured practitioners
+    res.set({
+      'Cache-Control': 'public, max-age=600', // 10 minutes
+      'ETag': `"featured-${Date.now()}"`
+    });
+    
+    res.json({
       success: true,
       count: practitioners.length,
       data: practitioners
     });
-  } catch (err) {
-    console.error(err);
+    
+  } catch (error) {
+    console.error('❌ Error fetching featured practitioners:', error);
     res.status(500).json({
       success: false,
       message: 'Server error'
